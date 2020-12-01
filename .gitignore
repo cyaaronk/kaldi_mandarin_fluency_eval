@@ -1,5 +1,0 @@
-## Ignore some files and folders for copyright and other reasons. 
-
-__pycache__/*
-exp/*
-data/graph*
