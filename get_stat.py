@@ -14,9 +14,14 @@ col_names = ['语音编号', '总字数', '非重复字数的总个数', '有意
                  '语速', '发音语速', '有意义产出语速', 'pruned有意义产出语速', '平均每次停顿时长', '停顿频率', 'Token Type Ratio']
 
 def print(*args):
-    args = [str(x) for x in args]
+    t = []
+    for i, arg in enumerate(args):
+        if type(arg) is int or type(arg) is float:
+            t.append(str(round(arg, 2)))
+        else:
+            t.append(str(arg))
     with open('stat/logs/'+utt_id+'.txt', 'a') as wf:
-        wf.write(' '.join(args)+'\n')
+        wf.write(' '.join(t)+'\n')
 
 for idx, row in wav_scp.iterrows():
     utt_id, test_wav = row['utt'], row['path']
@@ -28,8 +33,10 @@ for idx, row in wav_scp.iterrows():
     ali = ali.sort_values('start')
     py = ali["pinyin"].tolist()
     print("预测拼音:", py)
-    dur = ali["dur"].tolist()
+    dur = [round(x*3, 2) for x in ali["dur"].tolist()]
     print("预测时长:", dur)
+    go = [round(x*3, 2) for x in ali["start"].tolist()]
+    print("预测发音时间点:", go)
 
     # Read word dict
     id2tran = dict()
@@ -91,8 +98,8 @@ for idx, row in wav_scp.iterrows():
         aligns2 = [[0]*x for x in distances]
         for i2, c2 in enumerate(s2):
             distances_ = [i2+1]
-            aligns_ = [[["x"]*(i2+1)]]
-            aligns2_ = [[[0]*(i2+1)]]
+            aligns_ = [["x"]*(i2+1)]
+            aligns2_ = [[0]*(i2+1)]
             for i1, c1 in enumerate(s1):
                 if c1 == c2:
                     distances_.append(distances[i1])
@@ -116,21 +123,25 @@ for idx, row in wav_scp.iterrows():
         return distances[-1], aligns[-1], aligns2[-1]
 
     # Align transcription
-    _, alig_tran, _ = levenshteinDistance([x for x in tran], [x for x in gtran])
+    tran_edit_dist, alig_tran, _ = levenshteinDistance([x for x in tran], [x for x in gtran])
+    print("旁白编辑距离:", tran_edit_dist)
     print("对齐旁白:", alig_tran)
 
     # Align pinyin
-    _, alig_py, alig_dur = levenshteinDistance(py, gpy, dur)
+    py_edit_dist, alig_py, alig_dur = levenshteinDistance(py, gpy, dur)
+    print("拼音编辑距离:", py_edit_dist)
     print("对齐拼音:", alig_py)
     print("对齐时长:", alig_dur)
 
     # Calculate pinyin duration
     py_time = 0
-    for t in dur:
-        py_time += t
+    for py_, t in zip(py, dur):
+        if py_ != "sil":
+            py_time += t
     alig_py_time = 0
-    for t in alig_dur:
-        alig_py_time += t
+    for py_, t in zip(alig_py, alig_dur):
+        if py_ != "sil":
+            alig_py_time += t
 
     # Read wav
     y, sr = librosa.load(test_wav, sr=8000)
@@ -141,23 +152,29 @@ for idx, row in wav_scp.iterrows():
 
     # Calculate silence time
     sil_time = 0
-    sil_thre = np.mean(abs_y)*0.8
-    print("沉默音量阈值:", sil_thre)
-    for x in range(y.shape[0]-int(sr*0.01)):
-        if np.amax(abs_y[x:x+int(sr*0.01)]) < sil_thre:
-            sil_time += 1/sr
+    #sil_thre = np.mean(abs_y)*0.8
+    #print("沉默音量阈值:", sil_thre)
+    #for x in range(y.shape[0]-int(sr*0.01)):
+    #    if np.amax(abs_y[x:x+int(sr*0.01)]) < sil_thre:
+    #        sil_time += 1/sr
 
     # Calculate silence count
     sil_count = 0
     sil_pts = []
-    is_silence = True
-    for x in range(y.shape[0]-int(sr*0.25)):
-        if not is_silence and np.amax(abs_y[x:x+int(sr*0.25)]) < sil_thre:
-            sil_count += 1
-            is_silence = True
-            sil_pts.append(x/sr)
-        if y[x] >= sil_thre:
-            is_silence = False
+    for i, py_ in enumerate(py):
+        if py_ == "sil":
+            sil_time += dur[i]
+            if dur[i] >= 0.25:
+                sil_count += 1
+                sil_pts.append(go[i])
+    #is_silence = True
+    #for x in range(y.shape[0]-int(sr*0.25)):
+    #    if not is_silence and np.amax(abs_y[x:x+int(sr*0.25)]) < sil_thre:
+    #        sil_count += 1
+    #        is_silence = True
+    #        sil_pts.append(x/sr)
+    #    if y[x] >= sil_thre:
+    #        is_silence = False
     print("沉默时间点：", sil_pts)
 
     # Print stat
@@ -184,7 +201,8 @@ for idx, row in wav_scp.iterrows():
 
     with open("stat/stats.csv", 'a', newline='') as rf:
         writer = csv.writer(rf)
-        writer.writerow([utt_id, len(tran), len(set(tran)), len([1 for w in alig_tran if w != 'x']), y.shape[0]/sr, py_time, alig_py_time, \
-                         sil_time, sil_count, len(tran)/(y.shape[0]/sr), len(tran)/py_time, \
-                         len([1 for w in alig_tran if w != 'x'])/(y.shape[0]/sr), len([1 for w in alig_tran if w != 'x'])/alig_py_time, \
-                         ((y.shape[0]/sr)-py_time)/sil_count, ((y.shape[0]/sr)-py_time)/(y.shape[0]/sr), len(set(tran))/len(tran)])
+        stats = [len(tran), len(set(tran)), len([1 for w in alig_tran if w != 'x']), y.shape[0]/sr, py_time, alig_py_time, \
+                sil_time, sil_count, len(tran)/(y.shape[0]/sr), len(tran)/py_time, \
+                len([1 for w in alig_tran if w != 'x'])/(y.shape[0]/sr), len([1 for w in alig_tran if w != 'x'])/alig_py_time, \
+                ((y.shape[0]/sr)-py_time)/sil_count, ((y.shape[0]/sr)-py_time)/(y.shape[0]/sr), len(set(tran))/len(tran)]
+        writer.writerow([utt_id] + [round(x, 2) for x in stats])
